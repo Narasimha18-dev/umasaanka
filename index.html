@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy Friend — Fixed</title>
+<title>Flappy Friend — With Music</title>
 <style>
   :root{--bg1:#cfeff6;--bg2:#7fc9d9}
   body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(var(--bg1),var(--bg2));display:flex;align-items:flex-start;gap:12px;padding:18px}
@@ -16,11 +16,11 @@
 <body>
   <div style="display:flex;flex-direction:column;">
     <div class="hint">Controls: Click / Tap / Space = flap • R = restart</div>
-    <div class="note">Put your friend's image in the same folder as this file named <code>friend.png</code> (optional). If missing, a fallback bird is used.</div>
+    <div class="note">Place <code>friend.png</code>, <code>bg.mp3</code> and <code>gameover.mp3</code> in the same folder as this file (optional).</div>
     <div class="info">
       <strong>Status:</strong> <span id="status">Starting...</span>
       <div style="height:8px"></div>
-      <div style="font-size:12px;color:#333">Open browser console (F12) if you see a blank white screen — errors will appear there.</div>
+      <div style="font-size:12px;color:#333">Open DevTools (F12) for errors if anything fails.</div>
     </div>
   </div>
 
@@ -28,30 +28,45 @@
 
 <script>
 /*
-  Flappy Friend — robust version
-  - Uses friend.png if present (in same folder).
-  - If image fails, uses fallback drawn bird so game still runs.
-  - Shows status text while image loads.
+  Flappy Friend — With Music
+  - Uses friend.png if present; fallback drawn bird otherwise.
+  - bg.mp3 loops while playing; gameover.mp3 plays once on death.
+  - Background audio starts on first user gesture to satisfy autoplay policy.
+  - Pipe gap is large for easier play.
 */
 
+// Elements and canvas
 const statusEl = document.getElementById('status');
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 const GROUND = 40;
 
-// EASY SETTINGS (you had small jump, easy mode)
+function setStatus(s){ statusEl.textContent = s; }
+
+// --- AUDIO SETUP ---
+// Files must be in same folder as this HTML file (or change paths here)
+const bgAudio = new Audio('bg.mp3');       // background music (loop)
+bgAudio.loop = true;
+bgAudio.volume = 0.5;
+
+const gameOverAudio = new Audio('gameover.mp3'); // one-shot on game over
+gameOverAudio.volume = 0.9;
+
+let audioStarted = false; // tracks whether bgAudio was started by user gesture
+
+// --- PHYSICS & SETTINGS (easier/higher gap) ---
 const PHYS = {
   GRAVITY: 0.18,
   FLAP_STRENGTH: -3.5,
   PIPE_SPEED: 1.0,
-  PIPE_GAP: 230,
+  PIPE_GAP: 380,    // LARGE gap for easier play
   PIPE_WIDTH: 60,
   PIPE_SPACING: 260,
-  BIRD_SIZE: 48
+  BIRD_SIZE: 95
 };
 
-// game state
+// --- Game state ---
 let bird = { x: 80, y: H/2, w: PHYS.BIRD_SIZE, h: PHYS.BIRD_SIZE, vy: 0, rot: 0 };
 let pipes = [];
 let frame = 0;
@@ -60,40 +75,31 @@ let highScore = 0;
 let running = false;
 let gameOver = false;
 
-// image handling
+// --- Image loading (friend.png optional) ---
 let useImage = false;
-const birdImg = new Image();
-birdImg.src = 'umas.png'; // required filename if you want to use a photo
-
-// Set crossOrigin in case user serves from a different origin; harmless local.
-birdImg.crossOrigin = 'anonymous';
-
-// Update status element
-function setStatus(s){ statusEl.textContent = s; }
-
-// Image load / error handling
 let imgLoaded = false;
 let imgFailed = false;
+const birdImg = new Image();
+birdImg.crossOrigin = 'anonymous';
+birdImg.src = 'umas.png'; // change if your file name/path differs
 
 birdImg.onload = () => {
   imgLoaded = true;
   useImage = true;
   setStatus('Friend image loaded — ready!');
-  // adjust bird size a bit if image is huge (kept to PHYS.BIRD_SIZE)
 };
 birdImg.onerror = (e) => {
   imgFailed = true;
   useImage = false;
-  console.warn('friend.png failed to load. Using fallback bird. Error:', e);
-  setStatus('friend.png not found — using fallback bird (game will run).');
+  console.warn('friend.png failed to load. Using fallback bird.', e);
+  setStatus('friend.png not found — using fallback bird');
 };
 
-// Make sure status changes if image neither loads nor fails quickly (e.g. still trying)
-setTimeout(() => {
-  if(!imgLoaded && !imgFailed) setStatus('Loading image... (if it takes too long, game will still run with fallback)');
+setTimeout(()=>{
+  if(!imgLoaded && !imgFailed) setStatus('Loading image... (if it takes long, fallback will be used)');
 }, 300);
 
-// initialization functions
+// --- Game functions ---
 function reset(){
   bird.y = H/2;
   bird.vy = 0;
@@ -105,35 +111,40 @@ function reset(){
   gameOver = false;
   spawnPipe(W + 40);
   spawnPipe(W + 40 + PHYS.PIPE_SPACING);
+
+  // reset audio state
+  audioStarted = false;
+  try { gameOverAudio.pause(); gameOverAudio.currentTime = 0; } catch(e){}
+  try { bgAudio.pause(); bgAudio.currentTime = 0; } catch(e){}
+  setStatus('Ready — click/space to start (music starts on first flap)');
 }
 
 function spawnPipe(x){
   const minTop = 40;
   const maxTop = H - GROUND - PHYS.PIPE_GAP - 40;
-  const top = Math.floor(minTop + Math.random() * Math.max(1, (maxTop - minTop)));
+  const top = Math.floor(minTop + Math.random() * Math.max(1, maxTop - minTop));
   pipes.push({ x, top, width: PHYS.PIPE_WIDTH, passed: false });
 }
 
 function update(){
   if(!running) return;
 
-  // physics
   bird.vy += PHYS.GRAVITY;
   bird.y += bird.vy;
-  bird.rot = Math.max(-1.0, Math.min(1.5, bird.vy / 10));
+  bird.rot = Math.max(-1.0, Math.min(1.6, bird.vy / 10));
 
-  // pipes move
+  // move pipes
   for(let p of pipes) p.x -= PHYS.PIPE_SPEED;
 
-  // cleanup
+  // remove off-screen pipes
   while(pipes.length && pipes[0].x + PHYS.PIPE_WIDTH < -80) pipes.shift();
 
-  // spawn control (use PIPE_SPACING and PIPE_SPEED to approximate timing)
+  // spawn new pipes periodically
   if(frame % Math.floor(PHYS.PIPE_SPACING / Math.max(0.5, PHYS.PIPE_SPEED)) === 0){
     spawnPipe(W + 40);
   }
 
-  // scoring & collisions
+  // scoring & collision
   for(let p of pipes){
     if(!p.passed && p.x + p.width < bird.x - bird.w/2){
       p.passed = true;
@@ -148,7 +159,7 @@ function update(){
     }
   }
 
-  // ground & ceiling
+  // ground/ceiling
   if(bird.y + bird.h/2 >= H - GROUND) endGame();
   if(bird.y - bird.h/2 <= 0){ bird.y = bird.h/2; bird.vy = 0; }
 
@@ -163,20 +174,37 @@ function rectCircleColliding(rect, c){
   return (dx*dx + dy*dy) < (r*r);
 }
 
-function endGame(){ running = false; gameOver = true; setStatus('Game over — press R or click to restart'); }
+function endGame(){
+  if(gameOver) return;
+  running = false;
+  gameOver = true;
+
+  // stop background music
+  try { bgAudio.pause(); bgAudio.currentTime = 0; } catch(e){}
+
+  // play game over sound
+  try { gameOverAudio.currentTime = 0; gameOverAudio.play().catch(()=>{}); } catch(e){}
+
+  setStatus('Game over — press R or click to restart');
+}
 
 function flap(){
   if(gameOver){ reset(); return; }
+
+  // start background music on first user gesture (autoplay policy)
+  if(!audioStarted){
+    audioStarted = true;
+    bgAudio.play().catch((err)=>{ console.warn('bgAudio play failed:', err); });
+  }
+
   bird.vy = PHYS.FLAP_STRENGTH;
   running = true;
   setStatus('Playing — score: ' + score);
 }
 
 function draw(){
-  // clear
   ctx.clearRect(0,0,W,H);
 
-  // background sky (simple)
   // pipes
   for(let p of pipes){
     ctx.fillStyle = '#2e8b57';
@@ -193,30 +221,27 @@ function draw(){
   ctx.fillStyle = '#ded895';
   ctx.fillRect(0, H - GROUND, W, GROUND);
 
-  // bird: if image loaded and usable, draw it; otherwise fallback
+  // bird (image or fallback)
   ctx.save();
   ctx.translate(bird.x, bird.y);
   ctx.rotate(bird.rot);
 
   if(useImage && birdImg.complete && !imgFailed){
-    // fit image into bird box preserving aspect
     const iw = birdImg.width, ih = birdImg.height;
     const scale = Math.min(bird.w / iw, bird.h / ih);
     const dw = iw * scale, dh = ih * scale;
     ctx.drawImage(birdImg, -dw/2, -dh/2, dw, dh);
   } else {
-    // fallback: a simple circle bird
     ctx.beginPath();
     ctx.fillStyle = '#ffdd57';
     ctx.ellipse(0,0,bird.w/2,bird.h/2,0,0,Math.PI*2);
     ctx.fill();
-    // eye
     ctx.beginPath(); ctx.fillStyle = '#222'; ctx.arc(6, -4, 3, 0, Math.PI*2); ctx.fill();
   }
 
   ctx.restore();
 
-  // HUD - score
+  // score
   ctx.fillStyle = '#033';
   ctx.font = '42px system-ui, Arial';
   ctx.textAlign = 'center';
@@ -267,15 +292,13 @@ window.addEventListener('keydown', (e) => {
 canvas.addEventListener('mousedown', (e) => flap());
 canvas.addEventListener('touchstart', (e) => { e.preventDefault(); flap(); }, {passive:false});
 
-// Start reliably even if image pending
+// Start
 reset();
 setStatus('Ready — loading image (optional). Click/Space to start.');
 loop();
 
-// Helpful fallback instructions in console
-console.log('Flappy Friend — debug: friend.png will be loaded from same folder as this HTML.');
-console.log('If you see a blank screen, open DevTools (F12) and look for network errors (404) for friend.png.');
-
+// helpful console messages
+console.log('Flappy Friend (with music) — look for friend.png, bg.mp3, gameover.mp3 in same folder.');
 </script>
 </body>
 </html>
